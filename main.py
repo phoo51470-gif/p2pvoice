@@ -1,8 +1,28 @@
 import os
+from flask import Flask
+from threading import Thread
 import telebot
 import requests
 import time
 from telebot.apihelper import ApiException
+
+# Dummy Web Server (Render က Port ရှာတွေ့အောင် လုပ်ပေးခြင်း)
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# Server ကို စတင်ရန်
+keep_alive()
 
 TOKEN = "8861250979:AAFcPjnlmgzHEx9BjlCM7q7X4YOVry-c_Uw"
 GROQ_API_KEY = "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"

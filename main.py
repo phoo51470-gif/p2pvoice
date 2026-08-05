@@ -7,18 +7,15 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
 
-# Render Environment Variables ထဲကနေ ဆွဲယူခြင်း
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Groq Client စတင်ခြင်း
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-# Web Service Port အတွက် Flask App
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -29,13 +26,11 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     web_app.run(host='0.0.0.0', port=port)
 
-# /start Command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🎙️ အသံဖိုင် (Voice Message) ပို့ပေးပါ၊ စာအဖြစ် ပြောင်းပေးပါမည် (Voice to Text)။"
+        "🎙️ အသံဖိုင် ပို့ပေးပါ၊ မူရင်းအသံအတိုင်း စာအဖြစ် ပြောင်းပေးပါမည်။"
     )
 
-# Voice Message Handling Function
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     file_path = f"voice_{uuid.uuid4().hex}.ogg"
     
@@ -49,15 +44,17 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         await voice_file.download_to_drive(file_path)
 
+        # Whisper Model ကို မူရင်းစကားအတိုင်းပဲ စာပြောင်းခိုင်းခြင်း
         with open(file_path, "rb") as file:
             transcription = client.audio.transcriptions.create(
                 file=(file_path, file.read()),
-                model="whisper-large-v3-turbo",
-                prompt="Transcribe the exact audio spoken in Spanish, English, Korean, or any language.",
+                model="whisper-large-v3", # v3-turbo ထက် ပိုတိကျတဲ့ v3 ကို သုံးထားပါတယ်
+                response_format="text",
                 temperature=0.0
             )
 
-        transcribed_text = transcription.text
+        # response_format="text" သုံးထားလို့ တိုက်ရိုက် Text ရပါမယ်
+        transcribed_text = str(transcription).strip()
 
         await update.message.reply_text(
             f"📝 **အသံဖိုင်မှ စာပြောင်းလဲချက်:**\n\n{transcribed_text}"

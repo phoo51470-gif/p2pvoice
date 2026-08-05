@@ -1,121 +1,99 @@
 import os
-from flask import Flask
-from threading import Thread
-import telebot
-import requests
-import time
-from telebot.apihelper import ApiException
+import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from groq import Groq
 
-# Dummy Web Server (Render က Port ရှာတွေ့အောင် လုပ်ပေးခြင်း)
-app = Flask('')
+# Render Environment Variables ထဲကနေ ဆွဲယူခြင်း
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-@app.route('/')
-def home():
-    return "Bot is running!"
+# Groq Client စတင်ခြင်း
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-def run():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "✅ Bot (Groq Powered) အလုပ်လုပ်နေပါပြီ!\n\n"
+        "🎙️ အသံဖိုင် (Voice Message) သို့မဟုတ် 📝 စာတိုများ ပို့ပေးပါ။ "
+        "အင်္ဂလိပ် သို့မဟုတ် မြန်မာသို့ ဘာသာပြန်ပေးပါမည်။"
+    )
 
-# Server ကို စတင်ရန်
-keep_alive()
-
-TOKEN = "8861250979:AAFcPjnlmgzHEx9BjlCM7q7X4YOVry-c_Uw"
-GROQ_API_KEY = "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"
-
-bot = telebot.TeleBot(TOKEN)
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.reply_to(message, "မင်္ဂလာပါ! အသံဖိုင် (သို့) Voice ပို့ပေးပါက စာသားအဖြစ် ပြောင်းပေးပါမည်။ (Group ထဲတွင် Bot ကို Reply လုပ်၍ (သို့မဟုတ်) Mention ခေါ်၍ အသံပို့ပေးပါ)")
-
-@bot.message_handler(content_types=['voice', 'audio'])
-def handle_voice(message):
-    chat_type = message.chat.type
-    
-    if chat_type in ['group', 'supergroup']:
-        bot_username = bot.get_me().username
-        is_mentioned = message.caption and f"@{bot_username}" in message.caption
-        is_replied = message.reply_to_message and message.reply_to_message.from_user.id == bot.get_me().id
-        
-        if not is_mentioned and message.text:
-            is_mentioned = f"@{bot_username}" in message.text
-
-        if not (is_mentioned or is_replied):
-            return
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_text = update.message.text
+    await update.message.reply_text("🔄 ဘာသာပြန်နေပါသည်။ ခဏစောင့်ပါ...")
 
     try:
-        bot.reply_to(message, "🎙️ အသံဖိုင်ကို စစ်ဆေးနေပါသည်...")
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a professional translator. Translate English text to natural Myanmar (Burmese) language, or Myanmar text to English directly without extra explanations."
+                },
+                {"role": "user", "content": user_text}
+            ]
+        )
+        await update.message.reply_text(completion.choices[0].message.content)
+    except Exception as e:
+        await update.message.reply_text(f"❌ အမှားအယွင်းရှိပါသည်: {str(e)}")
 
-        if message.voice:
-            file_info = bot.get_file(message.voice.file_id)
-            file_ext = "voice.ogg"
-        elif message.audio:
-            file_info = bot.get_file(message.audio.file_id)
-            file_ext = "audio.mp3"
-        else:
-            bot.reply_to(message, "⚠️ ကျေးဇူးပြု၍ မှန်ကန်သော အသံဖိုင် (Voice / Audio) ကို ပို့ပေးပါ။")
-            return
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("🎙️ အသံဖိုင်ကို လက်ခံရရှိပါသည်။ ဘာသာပြန်နေပါပြီ...")
+    
+    try:
+        voice_file = await context.bot.get_file(update.message.voice.file_id)
+        file_path = "voice_input.ogg"
+        await voice_file.download_to_drive(file_path)
 
-        downloaded_file = bot.download_file(file_info.file_path)
+        with open(file_path, "rb") as file:
+            transcription = client.audio.transcriptions.create(
+                file=(file_path, file.read()),
+                model="whisper-large-v3-turbo"
+            )
 
-        with open(file_ext, "wb") as f:
-            f.write(downloaded_file)
+        transcribed_text = transcription.text
 
-        url = "https://api.groq.com/openai/v1/audio/transcriptions"
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}"
-        }
-        
-        with open(file_ext, "rb") as audio_file:
-            files = {"file": (file_ext, audio_file, "audio/ogg")}
-            data = {"model": "whisper-large-v3"}
-            
-            response = requests.post(url, headers=headers, files=files, data=data)
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a translator. Translate the given text into natural Burmese (Myanmar language)."
+                },
+                {"role": "user", "content": transcribed_text}
+            ]
+        )
 
-        if response.status_code == 200:
-            transcript = response.json().get("text", "စာသားအဖြစ် ပြောင်းလဲ၍ မရပါ။")
-            bot.reply_to(message, f"📝 **ပြောင်းလဲထားသော စာသား:**\n\n{transcript}", parse_mode="Markdown")
-        else:
-            bot.reply_to(message, f"❌ အမှားအယွင်းရှိပါသည်: {response.text}")
+        translated_text = completion.choices[0].message.content
 
-        if os.path.exists(file_ext):
-            os.remove(file_ext)
+        await update.message.reply_text(
+            f"🎙️ **ကြားရသော စာတို:**\n{transcribed_text}\n\n"
+            f"🇲🇲 **မြန်မာဘာသာပြန်:**\n{translated_text}"
+        )
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
     except Exception as e:
-        print(f"Voice Handle Error: {e}")
-        try:
-            bot.reply_to(message, f"⚠️ ချို့ယွင်းချက်ရှိပါသည်: ခဏစောင့်ပြီး ပြန်ကြိုးစားပေးပါ။")
-        except:
-            pass
+        await update.message.reply_text(f"❌ အသံ ဘာသာပြန်ရာတွင် အမှားအယွင်းရှိပါသည်: {str(e)}")
 
-@bot.message_handler(func=lambda message: True)
-def handle_text(message):
-    chat_type = message.chat.type
-    
-    if chat_type in ['group', 'supergroup']:
-        bot_username = bot.get_me().username
-        if message.text and f"@{bot_username}" in message.text:
-            bot.reply_to(message, "အသံဖိုင် ပို့ပါ၊ ဘာကူညီရမလဲ။")
+def main() -> None:
+    if not BOT_TOKEN or not GROQ_API_KEY:
+        print("❌ Error: BOT_TOKEN သို့မဟုတ် GROQ_API_KEY ကို Render Environment Variable မှာ မတွေ့ပါ။")
         return
-    else:
-        bot.reply_to(message, "အသံဖိုင် (သို့) Voice ပို့ပေးပါ၊ စာသားအဖြစ် ပြောင်းပေးပါမည်။")
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+    print("🤖 Groq Bot စတင်ပွဲထုတ်နေပါပြီ...")
+    app.run_polling()
 
 if __name__ == '__main__':
-    print("Bot စတင် အလုပ်လုပ်နေပါပြီ...")
-    while True:
-        try:
-            bot.infinity_polling(skip_pending=True, timeout=90, long_polling_timeout=90)
-        except ApiException as e:
-            print(f"Telegram API Error occurred: {e}")
-            time.sleep(5)
-        except requests.exceptions.RequestException as e:
-            print(f"Network Connection Error occurred: {e}")
-            time.sleep(10)
-        except Exception as e:
-            print(f"Unexpected Error occurred: {e}")
-            time.sleep(5)
+    main()

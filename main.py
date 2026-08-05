@@ -1,6 +1,8 @@
 import os
 import logging
 import uuid
+import threading
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
@@ -16,6 +18,17 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
+# Render Web Service Port ဖြေရှင်းရန် Flask Server ဆောက်ခြင်း
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Bot is running perfectly!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host='0.0.0.0', port=port)
+
 # /start နှိပ်ရင်ပြမယ့် Message
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -24,15 +37,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # အသံဖိုင် သီးသန့် ဘာသာပြန်ပေးမည့် Function
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # အသံဖိုင်အမည် မထပ်အောင် ဖိုင်နာမည် အသစ်ထုတ်ပေးခြင်း
     file_path = f"voice_{uuid.uuid4().hex}.ogg"
     
     try:
-        # Telegram ထဲက အသံဖိုင်ကို ဒေါင်းလုဒ်ဆွဲခြင်း
         voice_file = await context.bot.get_file(update.message.voice.file_id)
         await voice_file.download_to_drive(file_path)
 
-        # Groq Whisper (Voice to Text) သုံးပြီး စာအဖြစ်ပြောင်းခြင်း
         with open(file_path, "rb") as file:
             transcription = client.audio.transcriptions.create(
                 file=(file_path, file.read()),
@@ -41,7 +51,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         transcribed_text = transcription.text
 
-        # ပြောင်းထားတဲ့ စာကိုပဲ ရီပလိုင်း ပြန်ပေးခြင်း
         await update.message.reply_text(
             f"📝 **အသံဖိုင်မှ စာပြောင်းလဲချက်:**\n\n{transcribed_text}"
         )
@@ -50,7 +59,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(f"❌ အသံကို စာပြောင်းရာတွင် အမှားအယွင်းရှိပါသည်: {str(e)}")
 
     finally:
-        # ဒေါင်းထားတဲ့ အသံဖိုင်ကို ပြန်ဖျက်ခြင်း
         if os.path.exists(file_path):
             os.remove(file_path)
 
@@ -59,16 +67,15 @@ def main() -> None:
         print("❌ Error: BOT_TOKEN သို့မဟုတ် GROQ_API_KEY ကို မတွေ့ပါ။")
         return
 
+    # Flask Server ကို Thread အနေဖြင့် နောက်ကွယ်တွင် Run ခြင်း (Render Port Check အတွက်)
+    threading.Thread(target=run_flask, daemon=True).start()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # /start Command ကို လက်ခံမည်
     app.add_handler(CommandHandler("start", start))
-    
-    # ❌ စာသား (Text) တွေကို လုံးဝ Ignore လုပ်ထားသည် (ဂရုထဲမှာ စာရေးရင် ဘာမှပြန်မလုပ်ပါ)
-    # ✅ အသံဖိုင် (Voice) ရောက်လာမှသာ handle_voice ကို သွားပါမည်
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    print("🤖 Voice-to-Text Bot စတင်နေပါပြီ...")
+    print("🤖 Voice-to-Text Bot (Web Service) စတင်နေပါပြီ...")
     app.run_polling()
 
 if __name__ == '__main__':
